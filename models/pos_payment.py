@@ -24,12 +24,19 @@ class PosPayment(models.Model):
         help='Fecha a partir de la cual el cheque se puede cobrar. En un '
              'cheque de pago diferido es la que define cuándo entra la plata.')
 
-    # ── Complementarios: se cargan si están, no frenan la venta ───────────
+    # El TIPO también es obligatorio, y no por gusto nuestro: `l10n_latam_check`
+    # exige que todo cheque esté clasificado (Ley 24.452 / Comunicación BCRA) y
+    # RECHAZA EL CIERRE DE CAJA si falta. Si no se pide acá, el cajero se entera
+    # al final del día, con el cliente hace rato afuera. Medido el 10/09 haciendo
+    # el circuito completo.
+    check_type = fields.Selection(
+        [('at_sight', 'A la vista'),
+         ('cpd', 'Pago diferido (CPD)'),
+         ('echeq', 'Echeq')],
+        string='Tipo de cheque')
+
+    # ── Complementario: se carga si está, no frena la venta ───────────────
     check_issue_date = fields.Date(string='Fecha de emisión')
-    check_is_echeq = fields.Boolean(
-        string='Es e-cheq',
-        help='Cheque electrónico. Cambia cómo se deposita, no cómo se cobra '
-             'en el mostrador.')
 
     # `is_check` viaja al cobro para que las vistas y la validación no tengan
     # que ir a buscarlo al medio de pago en cada línea.
@@ -43,10 +50,28 @@ class PosPayment(models.Model):
         ('check_bank_id', 'banco'),
         ('check_issuer_vat', 'CUIT del librador'),
         ('check_payment_date', 'fecha de cobro'),
+        ('check_type', 'tipo de cheque'),
     )
 
+    @staticmethod
+    def _yg_cuit_valido(cuit):
+        """Dígito verificador del CUIT (módulo 11).
+
+        La localización lo valida al crear el cheque y **rechaza el cierre de
+        caja** si no cierra. Se comprueba acá para que el cajero lo vea al
+        cargar el cheque, no al final del día.
+        """
+        d = ''.join(ch for ch in str(cuit or '') if ch.isdigit())
+        if len(d) != 11:
+            return False
+        pesos = (5, 4, 3, 2, 7, 6, 5, 4, 3, 2)
+        suma = sum(int(a) * b for a, b in zip(d[:10], pesos))
+        resto = suma % 11
+        ver = 0 if resto == 0 else (9 if resto == 1 else 11 - resto)
+        return ver == int(d[10])
+
     @api.constrains('check_number', 'check_bank_id', 'check_issuer_vat',
-                    'check_payment_date', 'amount')
+                    'check_payment_date', 'check_type', 'amount')
     def _check_check_data(self):
         """Los datos del cheque son obligatorios en los cobros con cheque.
 
@@ -77,6 +102,14 @@ class PosPayment(models.Model):
                     'se puede depositar ni reclamar.',
                     medio=pago.payment_method_id.display_name,
                     faltan=', '.join(faltan)))
+            if not self._yg_cuit_valido(pago.check_issuer_vat):
+                raise ValidationError(_(
+                    'El CUIT del librador (%(cuit)s) no es válido: no cierra el '
+                    'dígito verificador.\n\n'
+                    'Conviene corregirlo ahora, con el cheque a la vista: si '
+                    'queda mal, el cierre de caja del día no va a poder '
+                    'confirmarse.',
+                    cuit=pago.check_issuer_vat))
 
     @api.model
     def _load_pos_data_fields(self, config):
@@ -105,6 +138,6 @@ class PosPayment(models.Model):
             return fields_list
         return fields_list + [
             'check_number', 'check_bank_id', 'check_issuer_vat',
-            'check_payment_date', 'check_issue_date', 'check_is_echeq',
+            'check_payment_date', 'check_issue_date', 'check_type',
             'is_check',
         ]

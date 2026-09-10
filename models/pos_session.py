@@ -87,12 +87,16 @@ class PosSession(models.Model):
             # traen `amount` igual al del pago; el nuestro venia en 0,00.
             'amount': pago.amount,
         }
-        # Los opcionales sólo si vienen: escribir False sobre un campo que la
-        # localización calcula sola es peor que no tocarlo.
+        # El TIPO va traducido a los tres flags de la localización. Sin esto
+        # `l10n_latam_check` RECHAZA EL CIERRE DE CAJA pidiendo que el cheque se
+        # clasifique (Ley 24.452 / Comunicación BCRA).
+        vals.update({
+            'at_sight': pos_payment.check_type == 'at_sight',
+            'is_cpd': pos_payment.check_type == 'cpd',
+            'is_echeq': pos_payment.check_type == 'echeq',
+        })
         if pos_payment.check_issue_date:
             vals['issue_date'] = pos_payment.check_issue_date
-        if pos_payment.check_is_echeq:
-            vals['is_echeq'] = True
         return Cheque.create(vals)
 
     # ══════════════════════════════════════════════════════════════════════

@@ -8,9 +8,35 @@ const CAMPOS = [
     { k: "check_bank_id", et: "Banco *", tipo: "select", req: true },
     { k: "check_issuer_vat", et: "CUIT librador *", tipo: "text", req: true, ph: "quien firma" },
     { k: "check_payment_date", et: "Fecha de cobro *", tipo: "date", req: true },
+    { k: "check_type", et: "Tipo *", tipo: "tipo", req: true },
     { k: "check_issue_date", et: "Emisión", tipo: "date" },
-    { k: "check_is_echeq", et: "e-cheq", tipo: "check" },
 ];
+
+/** Los tres que admite la localización argentina. */
+const TIPOS = [
+    ["at_sight", "A la vista"],
+    ["cpd", "Pago diferido (CPD)"],
+    ["echeq", "Echeq"],
+];
+
+/**
+ * Dígito verificador del CUIT (módulo 11).
+ *
+ * Se valida ACÁ, con el cheque en la mano, porque la localización lo valida al
+ * cerrar la caja y rechaza el cierre si no cierra: el cajero se enteraría al
+ * final del día, cuando ya no puede pedirle nada al cliente.
+ */
+function cuitValido(v) {
+    const d = String(v || "").replace(/\D/g, "");
+    if (d.length !== 11) {
+        return false;
+    }
+    const pesos = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2];
+    const suma = pesos.reduce((a, p, i) => a + p * parseInt(d[i], 10), 0);
+    const resto = suma % 11;
+    const ver = resto === 0 ? 0 : resto === 1 ? 9 : 11 - resto;
+    return ver === parseInt(d[10], 10);
+}
 
 /**
  * Dibuja los datos del cheque en el DOM, en vez de declararlos en el template.
@@ -87,12 +113,19 @@ patch(PaymentScreenPaymentLines.prototype, {
                     line.check_bank_id = id ? this.pos.models["res.bank"].get(id) : false;
                     this._ygMarcarFaltantes(host, line);
                 };
-            } else if (c.tipo === "check") {
-                inp = document.createElement("input");
-                inp.type = "checkbox";
-                inp.className = "form-check-input";
-                inp.checked = !!line[c.k];
-                inp.onchange = (ev) => (line[c.k] = ev.target.checked);
+            } else if (c.tipo === "tipo") {
+                inp = document.createElement("select");
+                inp.className = "form-select form-select-sm";
+                inp.appendChild(new Option("— elegir —", ""));
+                for (const [v, et] of TIPOS) {
+                    const o = new Option(et, v);
+                    o.selected = line.check_type === v;
+                    inp.appendChild(o);
+                }
+                inp.onchange = (ev) => {
+                    line.check_type = ev.target.value;
+                    this._ygMarcarFaltantes(host, line);
+                };
             } else {
                 inp = document.createElement("input");
                 inp.type = c.tipo;
@@ -110,6 +143,9 @@ patch(PaymentScreenPaymentLines.prototype, {
             col.appendChild(inp);
             caja.appendChild(col);
         }
+        const aviso = document.createElement("div");
+        aviso.className = "yg-cuit-aviso w-100 small text-warning";
+        caja.appendChild(aviso);
         host.appendChild(caja);
         this._ygMarcarFaltantes(host, line);
     },
@@ -121,6 +157,16 @@ patch(PaymentScreenPaymentLines.prototype, {
             const el = host.querySelector(`[data-yg-campo="${c.k}"]`);
             if (el) {
                 el.classList.toggle("border-warning", !line[c.k]);
+            }
+        }
+        // El CUIT además tiene que cerrar el dígito verificador.
+        const cu = host.querySelector('[data-yg-campo="check_issuer_vat"]');
+        const aviso = host.querySelector(".yg-cuit-aviso");
+        if (cu) {
+            const mal = line.check_issuer_vat && !cuitValido(line.check_issuer_vat);
+            cu.classList.toggle("border-warning", !line.check_issuer_vat || mal);
+            if (aviso) {
+                aviso.textContent = mal ? "El CUIT no cierra: revisalo con el cheque a la vista" : "";
             }
         }
     },
