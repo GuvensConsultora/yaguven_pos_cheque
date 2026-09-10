@@ -12,8 +12,22 @@
   <t t-name="yaguven_pos_cheque.PaymentLineCheckData"
      t-inherit="point_of_sale.PaymentScreenPaymentLines"
      t-inherit-mode="extension">
-    <xpath expr="//div[hasclass('paymentline')]" position="inside">
-      <div t-if="line.isCheckPayment" class="yg-check-data d-flex flex-wrap gap-2 p-2 mt-1 border-top">
+    <!--
+      OJO CON EL ANCLA DEL XPATH. La linea de pago del core declara su clase con
+      `t-attf-class="paymentline selected ..."`, que es DINAMICA, y `hasclass()`
+      solo matchea un atributo `class` LITERAL: anclar ahi no matchea nunca, el
+      bloque no se inserta, y NO HAY NINGUN ERROR — el POS carga igual y el cajero
+      simplemente no ve donde cargar los datos. Medido el 10/09 mirando el DOM.
+
+      El contenedor `paymentlines` (plural) si tiene `class` literal, asi que el
+      ancla va ahi y el recorrido de las lineas lo hacemos nosotros.
+    -->
+    <xpath expr="//div[hasclass('paymentlines')]" position="inside">
+      <t t-foreach="props.paymentLines" t-as="line" t-key="line.uuid + '_yg_chk'">
+      <div t-if="line.isCheckPayment" class="yg-check-data d-flex flex-wrap gap-2 p-2 mt-1 border rounded-3">
+        <div class="w-100 fw-bold small text-muted">
+          Datos del cheque — <t t-esc="line.payment_method_id.name"/>
+        </div>
 
         <div class="d-flex flex-column">
           <label class="o_form_label small text-muted">Número *</label>
@@ -78,6 +92,7 @@
         </div>
 
       </div>
+      </t>
     </xpath>
   </t>
 
