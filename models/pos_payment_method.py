@@ -15,6 +15,21 @@ class PosPaymentMethod(models.Model):
              'medio nuevo funciona sin tocar código.',
     )
 
+    check_journal_id = fields.Many2one(
+        'account.journal',
+        string='Diario de cheques de terceros',
+        domain="[('type', '=', 'cash')]",
+        help='Diario donde queda el cheque una vez cobrado. Tiene que ser el de '
+             'cheques de terceros de la localización, el mismo que usa '
+             'administración: es el que permite después depositarlo, endosarlo '
+             'o marcarlo rechazado.\n\n'
+             'El medio de pago en cambio va SIN diario. Suena raro y es a '
+             'propósito: con diario de efectivo el POS mete los cheques en el '
+             'arqueo de caja (el cajero tendría que contarlos como billetes) y '
+             'con diario de banco el cheque queda afuera del circuito de la '
+             'localización. Sin diario, el cobro queda en la cuenta del cliente '
+             'y el pago que crea este módulo la cancela.')
+
     @api.model
     def _load_pos_data_fields(self, config):
         """`is_check` tiene que viajar al navegador.

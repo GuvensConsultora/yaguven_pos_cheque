@@ -1,5 +1,12 @@
-from odoo import _, api, models
+import logging
+
+from odoo import _, api, fields, models
 from odoo.exceptions import UserError
+
+_logger = logging.getLogger(__name__)
+
+# Cuentas de cuenta corriente, para encontrar la linea a cancelar.
+CC = ('asset_receivable', 'liability_payable')
 
 
 class PosSession(models.Model):
@@ -21,113 +28,166 @@ class PosSession(models.Model):
     # ══════════════════════════════════════════════════════════════════════
     #  El cheque en cartera
     # ══════════════════════════════════════════════════════════════════════
-    def _create_split_account_payments(self, payment_amounts_list):
-        """Cuelga la ficha del cheque del `account.payment` que crea el POS.
+    def _validate_session(self, balancing_account=False, amount_to_balance=0,
+                          bank_payment_method_diffs=None):
+        """Al cerrar la caja, cada cobro con cheque se convierte en un pago real.
 
-        NO se crea un pago aparte, y es la decisión central de este módulo. El
-        POS ya crea un `account.payment` por cobro al cerrar la sesión (este
-        mismo método del core, `pos_session.py:1228`), y el asiento de cierre ya
-        deja la plata en la cuenta del diario del medio de pago. Un
-        `account.payment` propio ADEMAS de ése haría entrar el importe DOS
-        VECES, y el descalce aparecería recién en el balance.
+        POR QUE ACA Y NO ANTES: `l10n_latam.check.payment_id` es obligatorio —un
+        cheque no existe sin un `account.payment`— y el pago tiene que cancelar
+        algo que ya exista. Recien despues del cierre estan las lineas de cuenta
+        a cobrar que dejo el POS.
 
-        `l10n_latam.check.payment_id` es obligatorio: un cheque no puede existir
-        suelto. Por eso la ficha se cuelga acá y no antes — antes no hay pago
-        del cual colgarla.
+        POR QUE NO SE USA EL DIARIO DEL MEDIO DE PAGO, que seria lo obvio:
 
-        Requiere que el medio de pago tenga diario y `split_transactions`
-        (ver `_yg_check_config`): sin `split_transactions` el core agrupa todos
-        los cobros del método en UN pago (`_create_combine_account_payment`) y
-        no hay a qué cheque corresponde cada uno.
+          diario de EFECTIVO -> el POS mete los cheques en el ARQUEO DE CAJA y el
+                                cajero tendria que contarlos como billetes;
+          diario de BANCO    -> el POS si crea un pago por cobro, pero la
+                                localizacion NO admite ahi el metodo
+                                `new_third_party_checks` (aplica solo a `cash`),
+                                asi que el cheque queda FUERA del circuito: no se
+                                puede depositar, endosar ni marcar rechazado.
+
+        Por eso el medio va SIN diario (`pay_later`): el cobro queda en la cuenta
+        del cliente, y el pago que se crea aca —en el diario de cheques de
+        terceros de la localizacion, con su metodo— la cancela. No duplica: mueve.
         """
-        res = super()._create_split_account_payments(payment_amounts_list)
-
-        # Si la localización no está instalada, este módulo igual sirve: los
-        # datos del cheque quedan guardados en la línea de pago. Lo que no hay
-        # es ficha en cartera. Por eso no se declara la dependencia dura.
-        if 'l10n_latam.check' not in self.env:
-            return res
-
-        for pos_payment, linea in res.items():
-            if not pos_payment.is_check or not linea:
-                continue
-            pago = self.env['account.payment'].search(
-                [('move_id', '=', linea.move_id.id)], limit=1)
-            if not pago:
-                continue
-            self._yg_crear_cheque(pos_payment, pago)
+        res = super()._validate_session(
+            balancing_account=balancing_account,
+            amount_to_balance=amount_to_balance,
+            bank_payment_method_diffs=bank_payment_method_diffs)
+        try:
+            self._yg_materializar_cheques()
+        except Exception as e:
+            # El cierre de caja NO se cae por esto: la sesion ya esta cerrada y
+            # la plata contabilizada. Queda el aviso en el chatter de la sesion
+            # para que administracion lo resuelva.
+            _logger.exception('yaguven_pos_cheque: no se pudieron materializar '
+                              'los cheques de la sesion %s', self.name)
+            self.message_post(body=_(
+                'No se pudieron registrar los cheques de esta sesión: %(err)s\n\n'
+                'La caja cerró bien y la plata está contabilizada; lo que falta '
+                'es la ficha de cada cheque en cartera.', err=str(e)[:300]))
         return res
 
-    def _yg_crear_cheque(self, pos_payment, pago):
-        """Crea el `l10n_latam.check` de un cobro del POS.
+    def _yg_materializar_cheques(self):
+        """Un `account.payment` con su cheque por cada cobro con cheque."""
+        cobros = self.order_ids.payment_ids.filtered(
+            lambda p: p.is_check and p.amount)
+        for cobro in cobros:
+            if self._yg_ya_registrado(cobro):
+                continue
+            self._yg_crear_pago(cobro)
 
-        Dedupe por (número, banco, pago): si la sesión se reprocesa, no se
-        duplica la ficha. La clave incluye el banco porque dos bancos distintos
-        emiten el mismo número de cheque.
+    def _yg_ya_registrado(self, cobro):
+        Cheque = self.env.get('l10n_latam.check')
+        if Cheque is None:
+            return False
+        return bool(Cheque.sudo().search_count([
+            ('name', '=', cobro.check_number),
+            ('bank_id', '=', cobro.check_bank_id.id)]))
+
+    def _yg_crear_pago(self, cobro):
+        """El pago que cancela la cuenta a cobrar y deja el cheque en cartera.
+
+        EL CHEQUE VA DENTRO DEL PAGO, no se crea aparte. La localizacion valida
+        al postear que el importe del pago coincida con el del cheque asociado:
+        creando el cheque despues, el pago se postea sin cheque y falla con
+        «The amount of the payment does not match the amount of the selected
+        check». Medido el 10/09. Con `l10n_latam_new_check_ids` en el mismo
+        `create` queda todo consistente y es el camino nativo.
         """
-        Cheque = self.env['l10n_latam.check'].sudo()
-        dominio = [
-            ('name', '=', pos_payment.check_number),
-            ('bank_id', '=', pos_payment.check_bank_id.id),
-            ('payment_id', '=', pago.id),
-        ]
-        if Cheque.search_count(dominio):
-            return Cheque.browse()
+        metodo = cobro.payment_method_id
+        diario = metodo.check_journal_id
+        linea = diario.inbound_payment_method_line_ids.filtered(
+            lambda l: l.code == 'new_third_party_checks')[:1]
+        if not diario or not linea:
+            raise UserError(_(
+                'El medio «%(medio)s» no tiene un diario de cheques de terceros '
+                'con el método «Cheques de terceros nuevos» habilitado.',
+                medio=metodo.display_name))
 
-        vals = {
-            'name': pos_payment.check_number,
-            'bank_id': pos_payment.check_bank_id.id,
-            'issuer_vat': pos_payment.check_issuer_vat,
-            'payment_date': pos_payment.check_payment_date,
-            'payment_id': pago.id,
-            # `amount` es un campo ALMACENADO comun: no lo computa nadie. Sin
-            # esto el cheque queda en cartera con importe CERO -- la ficha
-            # existe, el listado la muestra, y el saldo de cheques no cierra.
-            # Medido en testing el 09/09: los cheques cargados por contabilidad
-            # traen `amount` igual al del pago; el nuestro venia en 0,00.
-            'amount': pago.amount,
+        cheque = {
+            'name': cobro.check_number,
+            'bank_id': cobro.check_bank_id.id,
+            'issuer_vat': cobro.check_issuer_vat,
+            'payment_date': cobro.check_payment_date,
+            'amount': cobro.amount,
+            'at_sight': cobro.check_type == 'at_sight',
+            'is_cpd': cobro.check_type == 'cpd',
+            'is_echeq': cobro.check_type == 'echeq',
         }
-        # El TIPO va traducido a los tres flags de la localización. Sin esto
-        # `l10n_latam_check` RECHAZA EL CIERRE DE CAJA pidiendo que el cheque se
-        # clasifique (Ley 24.452 / Comunicación BCRA).
-        vals.update({
-            'at_sight': pos_payment.check_type == 'at_sight',
-            'is_cpd': pos_payment.check_type == 'cpd',
-            'is_echeq': pos_payment.check_type == 'echeq',
+        if cobro.check_issue_date:
+            cheque['issue_date'] = cobro.check_issue_date
+
+        pago = self.env['account.payment'].sudo().create({
+            'payment_type': 'inbound',
+            'partner_type': 'customer',
+            'partner_id': cobro.pos_order_id.partner_id.id,
+            'amount': cobro.amount,
+            'date': (self.stop_at and self.stop_at.date()) or fields.Date.today(),
+            'journal_id': diario.id,
+            'payment_method_line_id': linea.id,
+            'memo': _('Cheque %(nro)s · %(orden)s',
+                      nro=cobro.check_number, orden=cobro.pos_order_id.name),
+            'pos_session_id': self.id,
+            'l10n_latam_new_check_ids': [(0, 0, cheque)],
         })
-        if pos_payment.check_issue_date:
-            vals['issue_date'] = pos_payment.check_issue_date
-        return Cheque.create(vals)
+        pago.action_post()
+        self._yg_conciliar(pago, cobro)
+        return pago
+
+    def _yg_conciliar(self, pago, cobro):
+        """Aparea el pago con la linea de cuenta a cobrar que dejo el POS.
+
+        Si no aparea, el cheque igual queda registrado: lo que falta es el
+        apareo, y eso se resuelve a mano sin perder el dato.
+        """
+        partner = cobro.pos_order_id.partner_id
+        if not partner:
+            return
+        dominio = [('move_id', '=', self.move_id.id),
+                   ('partner_id', '=', partner.id),
+                   ('account_id.account_type', 'in', list(CC)),
+                   ('reconciled', '=', False)]
+        cand = self.env['account.move.line'].sudo().search(dominio)
+        cand = cand.filtered(
+            lambda l: abs(abs(l.balance) - cobro.amount) < 0.01)[:1]
+        if not cand:
+            return
+        linea_pago = pago.move_id.line_ids.filtered(
+            lambda l: l.account_id.account_type in CC)[:1]
+        if linea_pago:
+            (cand + linea_pago).reconcile()
 
     # ══════════════════════════════════════════════════════════════════════
     def _yg_check_config(self):
-        """Los medios de cheque necesitan diario y `split_transactions`.
+        """Los medios de cheque van SIN diario y con el diario de cheques puesto.
 
         Se verifica al ABRIR la sesión y no al cerrarla: si falta la
-        configuración, el cajero se entera antes de vender, no después de
-        cobrar veinte cheques que no se van a poder registrar.
+        configuración, el cajero se entera antes de vender, no después de cobrar
+        veinte cheques que no se van a poder registrar.
         """
         for sesion in self:
-            malos = sesion.config_id.payment_method_ids.filtered(
-                lambda m: m.is_check and (
-                    not m.journal_id
-                    or not m.split_transactions
-                    or m.journal_id.type != 'bank'))
+            malos = []
+            for m in sesion.config_id.payment_method_ids.filtered('is_check'):
+                falta = []
+                if m.journal_id:
+                    falta.append('tiene diario y no debe tener')
+                if not m.check_journal_id:
+                    falta.append('le falta el diario de cheques de terceros')
+                if not m.split_transactions:
+                    falta.append('le falta «Identificar al cliente»')
+                if falta:
+                    malos.append(f"{m.display_name} ({', '.join(falta)})")
             if malos:
                 raise UserError(_(
                     'Estos medios de pago están marcados como cheque pero les '
-                    'falta configuración: %(medios)s.\n\n'
-                    'Necesitan:\n'
-                    '· un diario de tipo BANCO cuya cuenta sea la de cheques de '
-                    'terceros;\n'
-                    '· la opción «Identificar al cliente» activada.\n\n'
-                    'El tipo del diario no es un detalle: el POS sólo crea un '
-                    'pago por cobro cuando el medio es de tipo banco '
-                    '(`pos_session.py:937` lee `payment_method.type`). Con un '
-                    'diario de tipo efectivo los cobros se agrupan, no se puede '
-                    'saber a qué cheque corresponde cada uno, y además los '
-                    'cheques entran al arqueo de caja.',
-                    medios=', '.join(malos.mapped('display_name'))))
+                    'falta configuración:\n\n%(medios)s\n\n'
+                    'El medio va SIN diario: así el cobro queda en la cuenta del '
+                    'cliente, no entra al arqueo de efectivo, y el pago que crea '
+                    'este módulo al cerrar la caja lo cancela dejando el cheque '
+                    'en el circuito de la localización.',
+                    medios='\n'.join('· ' + x for x in malos)))
 
     def action_pos_session_open(self):
         self._yg_check_config()
