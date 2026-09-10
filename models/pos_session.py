@@ -80,6 +80,12 @@ class PosSession(models.Model):
             'issuer_vat': pos_payment.check_issuer_vat,
             'payment_date': pos_payment.check_payment_date,
             'payment_id': pago.id,
+            # `amount` es un campo ALMACENADO comun: no lo computa nadie. Sin
+            # esto el cheque queda en cartera con importe CERO -- la ficha
+            # existe, el listado la muestra, y el saldo de cheques no cierra.
+            # Medido en testing el 09/09: los cheques cargados por contabilidad
+            # traen `amount` igual al del pago; el nuestro venia en 0,00.
+            'amount': pago.amount,
         }
         # Los opcionales sólo si vienen: escribir False sobre un campo que la
         # localización calcula sola es peor que no tocarlo.
@@ -99,15 +105,24 @@ class PosSession(models.Model):
         """
         for sesion in self:
             malos = sesion.config_id.payment_method_ids.filtered(
-                lambda m: m.is_check and (not m.journal_id or not m.split_transactions))
+                lambda m: m.is_check and (
+                    not m.journal_id
+                    or not m.split_transactions
+                    or m.journal_id.type != 'bank'))
             if malos:
                 raise UserError(_(
                     'Estos medios de pago están marcados como cheque pero les '
                     'falta configuración: %(medios)s.\n\n'
-                    'Necesitan un diario (el de cheques de terceros) y la opción '
-                    '«Identificar al cliente» activada. Sin eso, los cobros se '
-                    'agrupan en un solo pago y no se puede saber a qué cheque '
-                    'corresponde cada uno.',
+                    'Necesitan:\n'
+                    '· un diario de tipo BANCO cuya cuenta sea la de cheques de '
+                    'terceros;\n'
+                    '· la opción «Identificar al cliente» activada.\n\n'
+                    'El tipo del diario no es un detalle: el POS sólo crea un '
+                    'pago por cobro cuando el medio es de tipo banco '
+                    '(`pos_session.py:937` lee `payment_method.type`). Con un '
+                    'diario de tipo efectivo los cobros se agrupan, no se puede '
+                    'saber a qué cheque corresponde cada uno, y además los '
+                    'cheques entran al arqueo de caja.',
                     medios=', '.join(malos.mapped('display_name'))))
 
     def action_pos_session_open(self):
