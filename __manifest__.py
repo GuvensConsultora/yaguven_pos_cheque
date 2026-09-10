@@ -1,6 +1,6 @@
 {
     "name": "POS · Cobro con cheque",
-    "version": "19.0.1.2.0",
+    "version": "19.0.2.0.0",
     "summary": "Cobrar con cheque en el punto de venta, con los datos del cheque",
     "description": """
 Permite cobrar con cheque en el POS pidiendo los datos que hacen falta para que
@@ -29,6 +29,7 @@ pago del POS; ningún campo de dato se agrega a un modelo de un tercero.
     "assets": {
         "point_of_sale._assets_pos": [
             "yaguven_pos_cheque/static/src/js/pos_payment.js",
+            "yaguven_pos_cheque/static/src/js/payment_lines.js",
             "yaguven_pos_cheque/static/src/js/payment_screen.js",
             "yaguven_pos_cheque/static/src/xml/payment_screen.xml",
         ],

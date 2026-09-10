@@ -22,77 +22,18 @@
       El contenedor `paymentlines` (plural) si tiene `class` literal, asi que el
       ancla va ahi y el recorrido de las lineas lo hacemos nosotros.
     -->
+    <!--
+      SOLO UN CONTENEDOR VACIO, y es a proposito.
+
+      Todo lo que lleve `t-if` o `t-foreach` dentro de un xpath heredado sobre
+      este template hace que OWL lo descarte ENTERO, sin ningun error visible.
+      Un `div` fijo si se inserta. Comprobado el 10/09 probando cinco variantes.
+
+      Asi que el ancla es este div y el contenido lo dibuja `payment_lines.js`
+      en cada render.
+    -->
     <xpath expr="//div[hasclass('paymentlines')]" position="inside">
-      <t t-foreach="props.paymentLines" t-as="line" t-key="line.uuid + '_yg_chk'">
-      <div t-if="line.isCheckPayment" class="yg-check-data d-flex flex-wrap gap-2 p-2 mt-1 border rounded-3">
-        <div class="w-100 fw-bold small text-muted">
-          Datos del cheque — <t t-esc="line.payment_method_id.name"/>
-        </div>
-
-        <div class="d-flex flex-column">
-          <label class="o_form_label small text-muted">Número *</label>
-          <input type="text"
-                 class="form-control form-control-sm yg-check-number"
-                 t-att-class="{ 'border-warning': !line.check_number }"
-                 placeholder="del cheque"
-                 t-att-value="line.check_number"
-                 t-on-change="(ev) => this.setCheckField(line, 'check_number', ev.target.value)"/>
-        </div>
-
-        <div class="d-flex flex-column">
-          <label class="o_form_label small text-muted">Banco *</label>
-          <select class="form-select form-select-sm yg-check-bank"
-                  t-att-class="{ 'border-warning': !line.check_bank_id }"
-                  t-on-change="(ev) => this.setCheckBank(line, ev.target.value)">
-            <option value="">— elegir —</option>
-            <t t-foreach="chequeBancos" t-as="banco" t-key="banco.id">
-              <option t-att-value="banco.id"
-                      t-att-selected="line.check_bank_id and line.check_bank_id.id === banco.id">
-                <t t-esc="banco.name"/>
-              </option>
-            </t>
-          </select>
-        </div>
-
-        <div class="d-flex flex-column">
-          <label class="o_form_label small text-muted">CUIT librador *</label>
-          <input type="text"
-                 class="form-control form-control-sm yg-check-vat"
-                 t-att-class="{ 'border-warning': !line.check_issuer_vat }"
-                 placeholder="quien firma"
-                 t-att-value="line.check_issuer_vat"
-                 t-on-change="(ev) => this.setCheckField(line, 'check_issuer_vat', ev.target.value)"/>
-        </div>
-
-        <div class="d-flex flex-column">
-          <label class="o_form_label small text-muted">Fecha de cobro *</label>
-          <input type="date"
-                 class="form-control form-control-sm yg-check-paydate"
-                 t-att-class="{ 'border-warning': !line.check_payment_date }"
-                 t-att-value="line.check_payment_date"
-                 t-on-change="(ev) => this.setCheckField(line, 'check_payment_date', ev.target.value)"/>
-        </div>
-
-        <div class="d-flex flex-column">
-          <label class="o_form_label small text-muted">Emisión</label>
-          <input type="date"
-                 class="form-control form-control-sm"
-                 t-att-value="line.check_issue_date"
-                 t-on-change="(ev) => this.setCheckField(line, 'check_issue_date', ev.target.value)"/>
-        </div>
-
-        <div class="d-flex flex-column justify-content-end">
-          <label class="o_form_label small text-muted d-flex align-items-center gap-1">
-            <input type="checkbox"
-                   class="form-check-input mt-0"
-                   t-att-checked="line.check_is_echeq"
-                   t-on-change="(ev) => this.setCheckField(line, 'check_is_echeq', ev.target.checked)"/>
-            e-cheq
-          </label>
-        </div>
-
-      </div>
-      </t>
+      <div class="yg-check-host"/>
     </xpath>
   </t>
 
