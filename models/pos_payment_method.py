@@ -15,20 +15,21 @@ class PosPaymentMethod(models.Model):
              'medio nuevo funciona sin tocar código.',
     )
 
-    check_journal_id = fields.Many2one(
-        'account.journal',
-        string='Diario de cheques de terceros',
-        domain="[('type', '=', 'cash')]",
-        help='Diario donde queda el cheque una vez cobrado. Tiene que ser el de '
-             'cheques de terceros de la localización, el mismo que usa '
-             'administración: es el que permite después depositarlo, endosarlo '
-             'o marcarlo rechazado.\n\n'
-             'El medio de pago en cambio va SIN diario. Suena raro y es a '
-             'propósito: con diario de efectivo el POS mete los cheques en el '
-             'arqueo de caja (el cajero tendría que contarlos como billetes) y '
-             'con diario de banco el cheque queda afuera del circuito de la '
-             'localización. Sin diario, el cobro queda en la cuenta del cliente '
-             'y el pago que crea este módulo la cancela.')
+    def _compute_is_cash_count(self):
+        """Los cheques NO se cuentan en el arqueo de efectivo.
+
+        El core lo resuelve con `is_cash_count = type == 'cash'`, y el medio de
+        cheque necesita un diario de tipo efectivo —es el único donde la
+        localización admite el método de cheques de terceros—. Sin este override
+        el cajero tendría que contar los cheques como si fueran billetes al
+        cerrar la caja.
+
+        Quedan igual en el desglose por medio de pago del cierre, que es donde
+        corresponde verlos: como recuento de cheques, no de efectivo.
+        """
+        super()._compute_is_cash_count()
+        for pm in self.filtered('is_check'):
+            pm.is_cash_count = False
 
     @api.model
     def _load_pos_data_fields(self, config):

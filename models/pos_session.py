@@ -97,7 +97,7 @@ class PosSession(models.Model):
         `create` queda todo consistente y es el camino nativo.
         """
         metodo = cobro.payment_method_id
-        diario = metodo.check_journal_id
+        diario = metodo.journal_id
         linea = diario.inbound_payment_method_line_ids.filtered(
             lambda l: l.code == 'new_third_party_checks')[:1]
         if not diario or not linea:
@@ -161,20 +161,28 @@ class PosSession(models.Model):
 
     # ══════════════════════════════════════════════════════════════════════
     def _yg_check_config(self):
-        """Los medios de cheque van SIN diario y con el diario de cheques puesto.
+        """El medio de cheque va con el diario de cheques de terceros.
 
-        Se verifica al ABRIR la sesión y no al cerrarla: si falta la
-        configuración, el cajero se entera antes de vender, no después de cobrar
-        veinte cheques que no se van a poder registrar.
+        Tiene que ser de tipo EFECTIVO: es el único donde la localización admite
+        el método «Cheques de terceros nuevos», que es el que después permite
+        depositar, endosar o marcar rechazado. Que sea de efectivo no lo mete en
+        el arqueo de billetes: eso lo resuelve `_compute_is_cash_count`.
+
+        Se verifica al ABRIR la sesión: si falta la configuración, el cajero se
+        entera antes de vender y no después de cobrar veinte cheques.
         """
         for sesion in self:
             malos = []
             for m in sesion.config_id.payment_method_ids.filtered('is_check'):
                 falta = []
-                if m.journal_id:
-                    falta.append('tiene diario y no debe tener')
-                if not m.check_journal_id:
+                if not m.journal_id:
                     falta.append('le falta el diario de cheques de terceros')
+                elif m.journal_id.type != 'cash':
+                    falta.append('el diario tiene que ser de tipo efectivo')
+                elif not m.journal_id.inbound_payment_method_line_ids.filtered(
+                        lambda l: l.code == 'new_third_party_checks'):
+                    falta.append('el diario no tiene habilitado «Cheques de '
+                                 'terceros nuevos»')
                 if not m.split_transactions:
                     falta.append('le falta «Identificar al cliente»')
                 if falta:
@@ -182,11 +190,7 @@ class PosSession(models.Model):
             if malos:
                 raise UserError(_(
                     'Estos medios de pago están marcados como cheque pero les '
-                    'falta configuración:\n\n%(medios)s\n\n'
-                    'El medio va SIN diario: así el cobro queda en la cuenta del '
-                    'cliente, no entra al arqueo de efectivo, y el pago que crea '
-                    'este módulo al cerrar la caja lo cancela dejando el cheque '
-                    'en el circuito de la localización.',
+                    'falta configuración:\n\n%(medios)s',
                     medios='\n'.join('· ' + x for x in malos)))
 
     def action_pos_session_open(self):

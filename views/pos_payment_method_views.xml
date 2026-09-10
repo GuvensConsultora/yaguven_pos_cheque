@@ -11,8 +11,6 @@
     <field name="arch" type="xml">
       <field name="journal_id" position="after">
         <field name="is_check"/>
-        <field name="check_journal_id" invisible="not is_check"
-               required="is_check" options="{'no_create': True}"/>
       </field>
     </field>
   </record>
