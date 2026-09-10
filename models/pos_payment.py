@@ -60,26 +60,45 @@ class PosPayment(models.Model):
     _LEGAL_DAYS_ECHEQ = 360
 
     def _yg_check_plazos(self):
-        """Fechas coherentes con el tipo de cheque."""
+        """Fechas coherentes con el tipo de cheque.
+
+        El cheque A LA VISTA también se controla, y no es un detalle: es el
+        cheque común, que por la Ley 24.452 tiene 30 días desde la emisión para
+        presentarse al cobro. Si alguien lo carga a la vista con fecha de cobro
+        a 45 días, lo que tiene en la mano es un cheque de pago diferido mal
+        clasificado — y así cargado el plazo real del cheque queda mintiendo en
+        el listado de cartera.
+
+        Sin fecha de emisión se toma la de hoy como referencia: un cheque a la
+        vista con cobro dentro de un mes largo es sospechoso igual.
+        """
         for pago in self:
-            if not pago.check_issue_date or pago.check_type == 'at_sight':
+            if not pago.check_payment_date:
                 continue
-            if pago.check_payment_date < pago.check_issue_date:
+            emision = pago.check_issue_date
+            if pago.check_type == 'at_sight' and not emision:
+                emision = fields.Date.context_today(pago)
+            if not emision:
+                continue
+            if pago.check_payment_date < emision:
                 raise ValidationError(_(
                     'La fecha de cobro (%(pay)s) no puede ser anterior a la de '
                     'emisión (%(iss)s).',
-                    pay=pago.check_payment_date, iss=pago.check_issue_date))
+                    pay=pago.check_payment_date, iss=emision))
             limite = (self._LEGAL_DAYS_ECHEQ if pago.check_type in ('cpd', 'echeq')
                       else self._LEGAL_DAYS_COMMON)
-            dias = (pago.check_payment_date - pago.check_issue_date).days
+            dias = (pago.check_payment_date - emision).days
             if dias > limite:
                 raise ValidationError(_(
-                    'Hay %(dias)s días entre la emisión y el cobro, y este tipo '
-                    'de cheque admite hasta %(limite)s (Ley 24.452).\n\n'
-                    'Si es un cheque de pago diferido marcalo como «Pago '
-                    'diferido (CPD)», y si es electrónico como «Echeq»: esos '
-                    'admiten hasta 360 días.',
-                    dias=dias, limite=limite))
+                    'Hay %(dias)s días hasta la fecha de cobro, y un %(tipo)s '
+                    'admite hasta %(limite)s (Ley 24.452).\n\n'
+                    'Si el cheque tiene fecha futura es un cheque de pago '
+                    'diferido: marcalo como «Pago diferido (CPD)», o como '
+                    '«Echeq» si es electrónico. Esos admiten hasta 360 días.',
+                    dias=dias, limite=limite,
+                    tipo={'at_sight': 'cheque a la vista',
+                          'cpd': 'cheque de pago diferido',
+                          'echeq': 'Echeq'}.get(pago.check_type, 'cheque común')))
 
     def _yg_check_duplicado(self):
         """El número de cheque es único por banco.
