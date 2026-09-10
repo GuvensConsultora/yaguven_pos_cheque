@@ -53,6 +53,69 @@ class PosPayment(models.Model):
         ('check_type', 'tipo de cheque'),
     )
 
+    # Los mismos plazos que valida `yaguven_payment_group` sobre el cheque ya
+    # creado (Ley 24.452 / Comunicación BCRA). Se repiten acá A PROPOSITO: si
+    # sólo se validan allá, el cajero se entera al cerrar la caja.
+    _LEGAL_DAYS_COMMON = 30
+    _LEGAL_DAYS_ECHEQ = 360
+
+    def _yg_check_plazos(self):
+        """Fechas coherentes con el tipo de cheque."""
+        for pago in self:
+            if not pago.check_issue_date or pago.check_type == 'at_sight':
+                continue
+            if pago.check_payment_date < pago.check_issue_date:
+                raise ValidationError(_(
+                    'La fecha de cobro (%(pay)s) no puede ser anterior a la de '
+                    'emisión (%(iss)s).',
+                    pay=pago.check_payment_date, iss=pago.check_issue_date))
+            limite = (self._LEGAL_DAYS_ECHEQ if pago.check_type in ('cpd', 'echeq')
+                      else self._LEGAL_DAYS_COMMON)
+            dias = (pago.check_payment_date - pago.check_issue_date).days
+            if dias > limite:
+                raise ValidationError(_(
+                    'Hay %(dias)s días entre la emisión y el cobro, y este tipo '
+                    'de cheque admite hasta %(limite)s (Ley 24.452).\n\n'
+                    'Si es un cheque de pago diferido marcalo como «Pago '
+                    'diferido (CPD)», y si es electrónico como «Echeq»: esos '
+                    'admiten hasta 360 días.',
+                    dias=dias, limite=limite))
+
+    def _yg_check_duplicado(self):
+        """El número de cheque es único por banco.
+
+        Se busca en los cheques ya en cartera Y en los cobros de sesiones
+        abiertas: dos cajas distintas pueden estar cargando el mismo cheque al
+        mismo tiempo, y si sólo se mira la cartera el choque aparece recién al
+        cerrar.
+        """
+        for pago in self:
+            if not pago.check_number or not pago.check_bank_id:
+                continue
+            Cheque = self.env.get('l10n_latam.check')
+            if Cheque is not None and Cheque.sudo().search_count([
+                    ('name', '=', pago.check_number),
+                    ('bank_id', '=', pago.check_bank_id.id)]):
+                raise ValidationError(_(
+                    'El cheque %(nro)s del banco %(banco)s ya está registrado.\n\n'
+                    'Cada cheque tiene número único por banco: si es el mismo, '
+                    'ya está cobrado; si es otro, revisá el número con el cheque '
+                    'a la vista.',
+                    nro=pago.check_number, banco=pago.check_bank_id.name))
+            otro = self.sudo().search([
+                ('id', '!=', pago.id),
+                ('check_number', '=', pago.check_number),
+                ('check_bank_id', '=', pago.check_bank_id.id),
+                ('pos_order_id.session_id.state', '!=', 'closed'),
+            ], limit=1)
+            if otro:
+                raise ValidationError(_(
+                    'El cheque %(nro)s del banco %(banco)s ya se cargó en esta '
+                    'jornada, en %(donde)s.\n\n'
+                    'Si es el mismo cheque, no hace falta cargarlo de nuevo.',
+                    nro=pago.check_number, banco=pago.check_bank_id.name,
+                    donde=otro.pos_order_id.session_id.display_name))
+
     @staticmethod
     def _yg_cuit_valido(cuit):
         """Dígito verificador del CUIT (módulo 11).
@@ -71,7 +134,8 @@ class PosPayment(models.Model):
         return ver == int(d[10])
 
     @api.constrains('check_number', 'check_bank_id', 'check_issuer_vat',
-                    'check_payment_date', 'check_type', 'amount')
+                    'check_payment_date', 'check_issue_date', 'check_type',
+                    'amount')
     def _check_check_data(self):
         """Los datos del cheque son obligatorios en los cobros con cheque.
 
@@ -110,6 +174,8 @@ class PosPayment(models.Model):
                     'queda mal, el cierre de caja del día no va a poder '
                     'confirmarse.',
                     cuit=pago.check_issuer_vat))
+            pago._yg_check_plazos()
+            pago._yg_check_duplicado()
 
     @api.model
     def _load_pos_data_fields(self, config):

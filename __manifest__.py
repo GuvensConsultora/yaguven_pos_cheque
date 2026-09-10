@@ -1,6 +1,6 @@
 {
     "name": "POS · Cobro con cheque",
-    "version": "19.0.4.1.0",
+    "version": "19.0.5.0.0",
     "summary": "Cobrar con cheque en el punto de venta, con los datos del cheque",
     "description": """
 Permite cobrar con cheque en el POS pidiendo los datos que hacen falta para que
