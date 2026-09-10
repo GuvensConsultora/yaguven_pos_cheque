@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+  <!-- La marca se define acá, a mano, en cada medio de pago con cheque.
+       No se deduce del nombre: un medio nuevo funciona sin tocar código.
+       Mismo criterio que `is_card` en yaguven_pos_tarjeta. -->
+  <record id="view_pos_payment_method_form_check" model="ir.ui.view">
+    <field name="name">pos.payment.method.form.check</field>
+    <field name="model">pos.payment.method</field>
+    <field name="inherit_id" ref="point_of_sale.pos_payment_method_view_form"/>
+    <field name="arch" type="xml">
+      <field name="journal_id" position="after">
+        <field name="is_check"/>
+      </field>
+    </field>
+  </record>
+
+  <record id="view_pos_payment_method_tree_check" model="ir.ui.view">
+    <field name="name">pos.payment.method.list.check</field>
+    <field name="model">pos.payment.method</field>
+    <field name="inherit_id" ref="point_of_sale.pos_payment_method_view_tree"/>
+    <field name="arch" type="xml">
+      <field name="journal_id" position="after">
+        <field name="is_check" optional="show"/>
+      </field>
+    </field>
+  </record>
+
+</odoo>
