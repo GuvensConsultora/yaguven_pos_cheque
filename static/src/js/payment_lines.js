@@ -109,7 +109,7 @@ patch(PaymentScreenPaymentLines.prototype, {
                     inp.appendChild(o);
                 }
                 inp.onchange = (ev) => {
-                    line.check_type = ev.target.value;
+                    line.check_type = ev.target.value || false;
                     this._ygMarcarFaltantes(host, line);
                 };
             } else {
@@ -121,7 +121,9 @@ patch(PaymentScreenPaymentLines.prototype, {
                 }
                 inp.value = line[c.k] || "";
                 inp.onchange = (ev) => {
-                    line[c.k] = ev.target.value.trim();
+                    // Fechas vacías = false: "" no es un valor válido al sincronizar.
+                    const v = ev.target.value.trim();
+                    line[c.k] = c.tipo === "date" ? v || false : v;
                     this._ygMarcarFaltantes(host, line);
                 };
             }

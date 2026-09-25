@@ -13,10 +13,12 @@ patch(PosPayment.prototype, {
         super.setup(...arguments);
         this.check_number = vals.check_number || "";
         this.check_bank_name = vals.check_bank_name || "";
-        this.check_type = vals.check_type || "";
+        // Selección: sin valor es `false`, nunca "" (la 20 rechaza "" al sincronizar
+        // y trababa TODOS los cobros, no sólo los de cheque).
+        this.check_type = vals.check_type || false;
         this.check_issuer_vat = vals.check_issuer_vat || "";
-        this.check_payment_date = vals.check_payment_date || "";
-        this.check_issue_date = vals.check_issue_date || "";
+        this.check_payment_date = vals.check_payment_date || false;
+        this.check_issue_date = vals.check_issue_date || false;
         this.check_is_echeq = vals.check_is_echeq || false;
     },
 
