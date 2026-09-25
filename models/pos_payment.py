@@ -12,8 +12,10 @@ class PosPayment(models.Model):
         string='Número de cheque', index=True,
         help='Número impreso en el cheque. Es lo que lo identifica ante el '
              'banco.')
-    check_bank_id = fields.Many2one(
-        'res.bank', string='Banco',
+    # Odoo 20: res.bank ya no existe; el banco va como texto (igual que en el cheque,
+    # campo yaguven_bank_name de yaguven_payment_group).
+    check_bank_name = fields.Char(
+        string='Banco',
         help='Banco contra el que está librado el cheque.')
     check_issuer_vat = fields.Char(
         string='CUIT del librador',
@@ -47,7 +49,7 @@ class PosPayment(models.Model):
     # sirve de referencia para la pantalla.
     _CAMPOS_OBLIGATORIOS = (
         ('check_number', 'número de cheque'),
-        ('check_bank_id', 'banco'),
+        ('check_bank_name', 'banco'),
         ('check_issuer_vat', 'CUIT del librador'),
         ('check_payment_date', 'fecha de cobro'),
         ('check_type', 'tipo de cheque'),
@@ -108,31 +110,32 @@ class PosPayment(models.Model):
         mismo tiempo, y si sólo se mira la cartera el choque aparece recién al
         cerrar.
         """
+        norm = lambda v: " ".join((v or "").lower().split())
         for pago in self:
-            if not pago.check_number or not pago.check_bank_id:
+            banco = norm(pago.check_bank_name)
+            if not pago.check_number or not banco:
                 continue
-            Cheque = self.env.get('l10n_latam.check')
-            if Cheque is not None and Cheque.sudo().search_count([
-                    ('name', '=', pago.check_number),
-                    ('bank_id', '=', pago.check_bank_id.id)]):
+            cartera = self.env['l10n_latam.check'].sudo().search(
+                [('name', '=', pago.check_number)]).filtered(
+                lambda c: norm(c.yaguven_bank_display) == banco)
+            if cartera:
                 raise ValidationError(_(
                     'El cheque %(nro)s del banco %(banco)s ya está registrado.\n\n'
                     'Cada cheque tiene número único por banco: si es el mismo, '
                     'ya está cobrado; si es otro, revisá el número con el cheque '
                     'a la vista.',
-                    nro=pago.check_number, banco=pago.check_bank_id.name))
+                    nro=pago.check_number, banco=pago.check_bank_name))
             otro = self.sudo().search([
                 ('id', '!=', pago.id),
                 ('check_number', '=', pago.check_number),
-                ('check_bank_id', '=', pago.check_bank_id.id),
                 ('pos_order_id.session_id.state', '!=', 'closed'),
-            ], limit=1)
+            ]).filtered(lambda p: norm(p.check_bank_name) == banco)[:1]
             if otro:
                 raise ValidationError(_(
                     'El cheque %(nro)s del banco %(banco)s ya se cargó en esta '
                     'jornada, en %(donde)s.\n\n'
                     'Si es el mismo cheque, no hace falta cargarlo de nuevo.',
-                    nro=pago.check_number, banco=pago.check_bank_id.name,
+                    nro=pago.check_number, banco=pago.check_bank_name,
                     donde=otro.pos_order_id.session_id.display_name))
 
     @staticmethod
@@ -152,7 +155,7 @@ class PosPayment(models.Model):
         ver = 0 if resto == 0 else (9 if resto == 1 else 11 - resto)
         return ver == int(d[10])
 
-    @api.constrains('check_number', 'check_bank_id', 'check_issuer_vat',
+    @api.constrains('check_number', 'check_bank_name', 'check_issuer_vat',
                     'check_payment_date', 'check_issue_date', 'check_type',
                     'amount')
     def _check_check_data(self):
@@ -222,7 +225,7 @@ class PosPayment(models.Model):
         if not fields_list:
             return fields_list
         return fields_list + [
-            'check_number', 'check_bank_id', 'check_issuer_vat',
+            'check_number', 'check_bank_name', 'check_issuer_vat',
             'check_payment_date', 'check_issue_date', 'check_type',
             'is_check',
         ]

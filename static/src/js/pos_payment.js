@@ -12,12 +12,12 @@ patch(PosPayment.prototype, {
     setup(vals) {
         super.setup(...arguments);
         this.check_number = vals.check_number || "";
+        this.check_bank_name = vals.check_bank_name || "";
+        this.check_type = vals.check_type || "";
         this.check_issuer_vat = vals.check_issuer_vat || "";
         this.check_payment_date = vals.check_payment_date || "";
         this.check_issue_date = vals.check_issue_date || "";
         this.check_is_echeq = vals.check_is_echeq || false;
-        // `check_bank_id` NO se inicializa acá: es una relación y la resuelve el
-        // modelo relacional del POS. Asignarle "" la rompe.
     },
 
     /** ¿este cobro es con cheque? */
@@ -39,7 +39,7 @@ patch(PosPayment.prototype, {
         if (!String(this.check_number || "").trim()) {
             faltan.push("número");
         }
-        if (!this.check_bank_id) {
+        if (!String(this.check_bank_name || "").trim()) {
             faltan.push("banco");
         }
         if (!String(this.check_issuer_vat || "").trim()) {
@@ -57,7 +57,7 @@ patch(PosPayment.prototype, {
         // qué cheque entregó si después hay que discutirlo.
         if (this.isCheckPayment && this.check_number) {
             res.check_number = this.check_number;
-            res.check_bank_name = this.check_bank_id?.name || "";
+            res.check_bank_name = this.check_bank_name || "";
         }
         return res;
     },

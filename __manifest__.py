@@ -1,6 +1,6 @@
 {
     "name": "POS · Cobro con cheque",
-    "version": "19.0.6.0.0",
+    "version": "20.0.7.0.0",
     "summary": "Cobrar con cheque en el punto de venta, con los datos del cheque",
     "description": """
 Permite cobrar con cheque en el POS pidiendo los datos que hacen falta para que
@@ -18,11 +18,10 @@ pago del POS; ningún campo de dato se agrega a un modelo de un tercero.
     "website": "https://yaguven.com",
     "category": "Point of Sale",
     "license": "LGPL-3",
-    # Sólo nativos. `l10n_latam_check` NO se declara como dependencia a
-    # propósito: este módulo junta los DATOS del cheque, y quien los convierte
-    # en un cheque en cartera es una pieza aparte. Así el POS sigue andando
-    # aunque la localización cambie.
-    "depends": ["point_of_sale"],
+    # Odoo 20: se declaran l10n_latam_check y yaguven_payment_group. El cierre de
+    # caja crea el cheque en cartera con campos de yaguven_payment_group (tipo,
+    # emisión, banco como texto); en 19 esa dependencia existía sin declararse.
+    "depends": ["point_of_sale", "l10n_latam_check", "yaguven_payment_group"],
     "data": [
         "views/pos_payment_method_views.xml",
     ],

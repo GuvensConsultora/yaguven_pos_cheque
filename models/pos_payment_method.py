@@ -15,21 +15,30 @@ class PosPaymentMethod(models.Model):
              'medio nuevo funciona sin tocar código.',
     )
 
-    def _compute_is_cash_count(self):
-        """Los cheques NO se cuentan en el arqueo de efectivo.
+    check_journal_id = fields.Many2one(
+        'account.journal', string='Diario de cheques de terceros',
+        domain="[('type', '=', 'cash'), ('company_id', '=', company_id)]",
+        help='Diario donde quedan los cheques en cartera al cerrar la caja. Es el '
+             'de efectivo con el método «Cheques de terceros nuevos» de la '
+             'localización.\n\nOdoo 20: el medio de cheque va como «Cuenta de '
+             'cliente» (sin diario propio), porque cada caja admite un solo medio de '
+             'efectivo; el diario de cheques se indica acá.')
 
-        El core lo resuelve con `is_cash_count = type == 'cash'`, y el medio de
-        cheque necesita un diario de tipo efectivo —es el único donde la
-        localización admite el método de cheques de terceros—. Sin este override
-        el cajero tendría que contar los cheques como si fueran billetes al
-        cerrar la caja.
-
-        Quedan igual en el desglose por medio de pago del cierre, que es donde
-        corresponde verlos: como recuento de cheques, no de efectivo.
-        """
-        super()._compute_is_cash_count()
-        for pm in self.filtered('is_check'):
-            pm.is_cash_count = False
+    def _yg_faltantes_cheque(self):
+        """Qué le falta a un medio de cheque para funcionar (lista vacía = bien)."""
+        self.ensure_one()
+        falta = []
+        if self.type != 'pay_later':
+            falta.append('tiene que ser de tipo «Cuenta de cliente», sin diario')
+        j = self.check_journal_id
+        if not j:
+            falta.append('le falta el diario de cheques de terceros')
+        elif j.type != 'cash':
+            falta.append('el diario de cheques tiene que ser de tipo efectivo')
+        elif not j.inbound_payment_method_line_ids.filtered(
+                lambda l: l.code == 'new_third_party_checks'):
+            falta.append('el diario de cheques no tiene habilitado «Cheques de terceros nuevos»')
+        return falta
 
     @api.model
     def _load_pos_data_fields(self, config):

@@ -5,7 +5,7 @@ import { onMounted, onPatched } from "@odoo/owl";
 /** Los cuatro obligatorios, y los dos opcionales. */
 const CAMPOS = [
     { k: "check_number", et: "Número *", tipo: "text", req: true, ph: "del cheque" },
-    { k: "check_bank_id", et: "Banco *", tipo: "select", req: true },
+    { k: "check_bank_name", et: "Banco *", tipo: "text", req: true, ph: "ej. Galicia" },
     { k: "check_issuer_vat", et: "CUIT librador *", tipo: "text", req: true, ph: "quien firma" },
     { k: "check_payment_date", et: "Fecha de cobro *", tipo: "date", req: true },
     { k: "check_type", et: "Tipo *", tipo: "tipo", req: true },
@@ -99,21 +99,7 @@ patch(PaymentScreenPaymentLines.prototype, {
             col.appendChild(lab);
 
             let inp;
-            if (c.tipo === "select") {
-                inp = document.createElement("select");
-                inp.className = "form-select form-select-sm";
-                inp.appendChild(new Option("— elegir —", ""));
-                for (const b of this.pos.models["res.bank"]?.getAll() || []) {
-                    const o = new Option(b.name, b.id);
-                    o.selected = line.check_bank_id?.id === b.id;
-                    inp.appendChild(o);
-                }
-                inp.onchange = (ev) => {
-                    const id = parseInt(ev.target.value, 10);
-                    line.check_bank_id = id ? this.pos.models["res.bank"].get(id) : false;
-                    this._ygMarcarFaltantes(host, line);
-                };
-            } else if (c.tipo === "tipo") {
+            if (c.tipo === "tipo") {
                 inp = document.createElement("select");
                 inp.className = "form-select form-select-sm";
                 inp.appendChild(new Option("— elegir —", ""));

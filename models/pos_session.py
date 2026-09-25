@@ -12,60 +12,36 @@ CC = ('asset_receivable', 'liability_payable')
 class PosSession(models.Model):
     _inherit = 'pos.session'
 
-    @api.model
-    def _load_pos_data_models(self, config):
-        """Suma `res.bank` a los modelos que el POS baja al abrir la sesión.
-
-        El core trae 45 modelos y `res.bank` no está (verificado en
-        `point_of_sale/models/pos_session.py:139` de esta instancia): al POS
-        nativo no le hace falta un banco para vender. Acá sí, para que el banco
-        del cheque salga de un desplegable y no de un campo de texto.
-
-        Se suma al final y sin quitar nada: la lista del core se respeta.
-        """
-        return super()._load_pos_data_models(config) + ['res.bank']
-
     # ══════════════════════════════════════════════════════════════════════
     #  El cheque en cartera
     # ══════════════════════════════════════════════════════════════════════
-    def _validate_session(self, balancing_account=False, amount_to_balance=0,
-                          bank_payment_method_diffs=None):
+    def _validate_session_accounting(self):
         """Al cerrar la caja, cada cobro con cheque se convierte en un pago real.
 
-        POR QUE ACA Y NO ANTES: `l10n_latam.check.payment_id` es obligatorio —un
-        cheque no existe sin un `account.payment`— y el pago tiene que cancelar
-        algo que ya exista. Recien despues del cierre estan las lineas de cuenta
-        a cobrar que dejo el POS.
+        Odoo 20: el cierre pasa por `_validate_session_accounting` (en 19 era
+        `_validate_session`, que ya no existe).
 
-        POR QUE NO SE USA EL DIARIO DEL MEDIO DE PAGO, que seria lo obvio:
-
-          diario de EFECTIVO -> el POS mete los cheques en el ARQUEO DE CAJA y el
-                                cajero tendria que contarlos como billetes;
-          diario de BANCO    -> el POS si crea un pago por cobro, pero la
-                                localizacion NO admite ahi el metodo
-                                `new_third_party_checks` (aplica solo a `cash`),
-                                asi que el cheque queda FUERA del circuito: no se
-                                puede depositar, endosar ni marcar rechazado.
-
-        Por eso el medio va SIN diario (`pay_later`): el cobro queda en la cuenta
-        del cliente, y el pago que se crea aca —en el diario de cheques de
-        terceros de la localizacion, con su metodo— la cancela. No duplica: mueve.
+        El medio de cheque es «Cuenta de cliente» (`pay_later`, sin diario): en 20
+        cada caja admite un solo medio de efectivo, y el diario de cheques de
+        terceros es de efectivo. Además, en 20 toda venta con `pay_later` se
+        factura sí o sí, así que el cobro queda ABIERTO en la factura del cliente.
+        Acá se crea el pago en el diario de cheques de terceros (el del campo
+        `check_journal_id` del medio), con el cheque adentro, y se concilia contra
+        esa factura. No duplica: mueve la deuda del cliente al cheque en cartera.
         """
-        res = super()._validate_session(
-            balancing_account=balancing_account,
-            amount_to_balance=amount_to_balance,
-            bank_payment_method_diffs=bank_payment_method_diffs)
+        res = super()._validate_session_accounting()
         try:
-            self._yg_materializar_cheques()
+            with self.env.cr.savepoint():
+                self._yg_materializar_cheques()
         except Exception as e:
-            # El cierre de caja NO se cae por esto: la sesion ya esta cerrada y
-            # la plata contabilizada. Queda el aviso en el chatter de la sesion
-            # para que administracion lo resuelva.
+            # El cierre de caja NO se cae por esto: la venta está facturada y la
+            # deuda del cliente registrada. Queda el aviso en el chatter de la
+            # sesión para que administración cargue el cheque a mano.
             _logger.exception('yaguven_pos_cheque: no se pudieron materializar '
                               'los cheques de la sesion %s', self.name)
             self.message_post(body=_(
                 'No se pudieron registrar los cheques de esta sesión: %(err)s\n\n'
-                'La caja cerró bien y la plata está contabilizada; lo que falta '
+                'La caja cerró bien y las ventas quedaron facturadas; lo que falta '
                 'es la ficha de cada cheque en cartera.', err=str(e)[:300]))
         return res
 
@@ -79,12 +55,10 @@ class PosSession(models.Model):
             self._yg_crear_pago(cobro)
 
     def _yg_ya_registrado(self, cobro):
-        Cheque = self.env.get('l10n_latam.check')
-        if Cheque is None:
-            return False
-        return bool(Cheque.sudo().search_count([
-            ('name', '=', cobro.check_number),
-            ('bank_id', '=', cobro.check_bank_id.id)]))
+        norm = lambda v: " ".join((v or "").lower().split())
+        cheques = self.env['l10n_latam.check'].sudo().search([('name', '=', cobro.check_number)])
+        return bool(cheques.filtered(
+            lambda c: norm(c.yaguven_bank_display) == norm(cobro.check_bank_name)))
 
     def _yg_crear_pago(self, cobro):
         """El pago que cancela la cuenta a cobrar y deja el cheque en cartera.
@@ -97,7 +71,7 @@ class PosSession(models.Model):
         `create` queda todo consistente y es el camino nativo.
         """
         metodo = cobro.payment_method_id
-        diario = metodo.journal_id
+        diario = metodo.check_journal_id
         linea = diario.inbound_payment_method_line_ids.filtered(
             lambda l: l.code == 'new_third_party_checks')[:1]
         if not diario or not linea:
@@ -108,7 +82,7 @@ class PosSession(models.Model):
 
         cheque = {
             'name': cobro.check_number,
-            'bank_id': cobro.check_bank_id.id,
+            'yaguven_bank_name': cobro.check_bank_name,
             'issuer_vat': cobro.check_issuer_vat,
             'payment_date': cobro.check_payment_date,
             'amount': cobro.amount,
@@ -137,54 +111,39 @@ class PosSession(models.Model):
         return pago
 
     def _yg_conciliar(self, pago, cobro):
-        """Aparea el pago con la linea de cuenta a cobrar que dejo el POS.
+        """Aparea el pago con la cuenta a cobrar de la FACTURA de la venta.
 
-        Si no aparea, el cheque igual queda registrado: lo que falta es el
-        apareo, y eso se resuelve a mano sin perder el dato.
+        Odoo 20: la sesión ya no tiene un asiento único (`move_id`); una venta con
+        «Cuenta de cliente» se factura sí o sí y su deuda queda en esa factura.
+        Si no aparea, el cheque igual queda registrado: falta el apareo, que se
+        resuelve a mano sin perder el dato.
         """
-        partner = cobro.pos_order_id.partner_id
-        if not partner:
+        factura = cobro.pos_order_id.account_move
+        partner = cobro.pos_order_id.partner_id.commercial_partner_id
+        if not factura or not partner:
             return
-        dominio = [('move_id', '=', self.move_id.id),
-                   ('partner_id', '=', partner.id),
-                   ('account_id.account_type', 'in', list(CC)),
-                   ('reconciled', '=', False)]
-        cand = self.env['account.move.line'].sudo().search(dominio)
-        cand = cand.filtered(
-            lambda l: abs(abs(l.balance) - cobro.amount) < 0.01)[:1]
-        if not cand:
-            return
+        cand = factura.line_ids.filtered(
+            lambda l: l.account_id.account_type in CC
+            and l.partner_id.commercial_partner_id == partner
+            and not l.reconciled)
         linea_pago = pago.move_id.line_ids.filtered(
-            lambda l: l.account_id.account_type in CC)[:1]
-        if linea_pago:
-            (cand + linea_pago).reconcile()
+            lambda l: l.account_id.account_type in CC and not l.reconciled)[:1]
+        if cand and linea_pago and cand[:1].account_id == linea_pago.account_id:
+            (cand[:1] + linea_pago).reconcile()
 
     # ══════════════════════════════════════════════════════════════════════
     def _yg_check_config(self):
-        """El medio de cheque va con el diario de cheques de terceros.
+        """El medio de cheque tiene que estar bien armado antes de vender.
 
-        Tiene que ser de tipo EFECTIVO: es el único donde la localización admite
-        el método «Cheques de terceros nuevos», que es el que después permite
-        depositar, endosar o marcar rechazado. Que sea de efectivo no lo mete en
-        el arqueo de billetes: eso lo resuelve `_compute_is_cash_count`.
-
-        Se verifica al ABRIR la sesión: si falta la configuración, el cajero se
-        entera antes de vender y no después de cobrar veinte cheques.
+        En 20: medio «Cuenta de cliente» (`pay_later`, sin diario propio) + el
+        diario de cheques de terceros en `check_journal_id` (de efectivo, con el
+        método «Cheques de terceros nuevos»). Se verifica al ABRIR la caja: si
+        falta algo, el cajero se entera antes de cobrar el primer cheque.
         """
         for sesion in self:
             malos = []
             for m in sesion.config_id.payment_method_ids.filtered('is_check'):
-                falta = []
-                if not m.journal_id:
-                    falta.append('le falta el diario de cheques de terceros')
-                elif m.journal_id.type != 'cash':
-                    falta.append('el diario tiene que ser de tipo efectivo')
-                elif not m.journal_id.inbound_payment_method_line_ids.filtered(
-                        lambda l: l.code == 'new_third_party_checks'):
-                    falta.append('el diario no tiene habilitado «Cheques de '
-                                 'terceros nuevos»')
-                if not m.split_transactions:
-                    falta.append('le falta «Identificar al cliente»')
+                falta = m._yg_faltantes_cheque()
                 if falta:
                     malos.append(f"{m.display_name} ({', '.join(falta)})")
             if malos:
@@ -193,6 +152,7 @@ class PosSession(models.Model):
                     'falta configuración:\n\n%(medios)s',
                     medios='\n'.join('· ' + x for x in malos)))
 
-    def action_pos_session_open(self):
+    def _set_opening_control_data(self, cashbox_value, notes):
+        # 20: la apertura pasa por acá (action_pos_session_open ya no existe).
         self._yg_check_config()
-        return super().action_pos_session_open()
+        return super()._set_opening_control_data(cashbox_value, notes)
