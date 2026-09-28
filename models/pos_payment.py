@@ -126,7 +126,9 @@ class PosPayment(models.Model):
                     'a la vista.',
                     nro=pago.check_number, banco=pago.check_bank_name))
             otro = self.sudo().search([
-                ('id', '!=', pago.id),
+                # `_origin.id`: la liquidación de facturas valida un cobro armado en
+                # memoria (NewId), que no puede ir en un dominio.
+                ('id', '!=', pago._origin.id or 0),
                 ('check_number', '=', pago.check_number),
                 ('pos_order_id.session_id.state', '!=', 'closed'),
             ]).filtered(lambda p: norm(p.check_bank_name) == banco)[:1]

@@ -60,7 +60,7 @@ class PosSession(models.Model):
         return bool(cheques.filtered(
             lambda c: norm(c.yaguven_bank_display) == norm(cobro.check_bank_name)))
 
-    def _yg_crear_pago(self, cobro):
+    def _yg_crear_pago(self, cobro, partner=None, memo=None, conciliar=True):
         """El pago que cancela la cuenta a cobrar y deja el cheque en cartera.
 
         EL CHEQUE VA DENTRO DEL PAGO, no se crea aparte. La localizacion valida
@@ -69,6 +69,10 @@ class PosSession(models.Model):
         «The amount of the payment does not match the amount of the selected
         check». Medido el 10/09. Con `l10n_latam_new_check_ids` en el mismo
         `create` queda todo consistente y es el camino nativo.
+
+        `partner` / `memo` / `conciliar`: la liquidación de facturas desde el POS
+        (`yaguven_pos_cheque_settle`) cobra sin orden del POS; pasa el cliente de
+        las facturas y concilia ella misma contra esas facturas.
         """
         metodo = cobro.payment_method_id
         diario = metodo.check_journal_id
@@ -96,18 +100,19 @@ class PosSession(models.Model):
         pago = self.env['account.payment'].sudo().create({
             'payment_type': 'inbound',
             'partner_type': 'customer',
-            'partner_id': cobro.pos_order_id.partner_id.id,
+            'partner_id': (partner or cobro.pos_order_id.partner_id).id,
             'amount': cobro.amount,
             'date': (self.stop_at and self.stop_at.date()) or fields.Date.today(),
             'journal_id': diario.id,
             'payment_method_line_id': linea.id,
-            'memo': _('Cheque %(nro)s · %(orden)s',
-                      nro=cobro.check_number, orden=cobro.pos_order_id.name),
+            'memo': memo or _('Cheque %(nro)s · %(orden)s',
+                              nro=cobro.check_number, orden=cobro.pos_order_id.name),
             'pos_session_id': self.id,
             'l10n_latam_new_check_ids': [(0, 0, cheque)],
         })
         pago.action_post()
-        self._yg_conciliar(pago, cobro)
+        if conciliar:
+            self._yg_conciliar(pago, cobro)
         return pago
 
     def _yg_conciliar(self, pago, cobro):
