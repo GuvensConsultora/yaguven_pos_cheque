@@ -1,6 +1,9 @@
 import { PaymentScreenPaymentLines } from "@point_of_sale/app/screens/payment_screen/payment_lines/payment_lines";
 import { patch } from "@web/core/utils/patch";
 import { onMounted, onPatched } from "@odoo/owl";
+import { useService } from "@web/core/utils/hooks";
+import { ask } from "@point_of_sale/app/utils/make_awaitable_dialog";
+import { _t } from "@web/core/l10n/translation";
 
 /** Los cuatro obligatorios, y los dos opcionales. */
 const CAMPOS = [
@@ -39,6 +42,16 @@ function cuitValido(v) {
 }
 
 /**
+ * Número de cheque fuera de lo habitual: más de 8 dígitos, o algo que no es un
+ * número. Misma regla que `yaguven_cheque_nro_control` en Contabilidad. Avisa,
+ * no bloquea: hay cheques válidos con otros formatos (echeq).
+ */
+function nroRaro(v) {
+    const n = String(v || "").trim();
+    return Boolean(n) && (!/^\d+$/.test(n) || n.length > 8);
+}
+
+/**
  * Dibuja los datos del cheque en el DOM, en vez de declararlos en el template.
  *
  * POR QUE ASI Y NO CON UN TEMPLATE: cualquier `t-if` o `t-foreach` dentro de un
@@ -51,6 +64,7 @@ function cuitValido(v) {
 patch(PaymentScreenPaymentLines.prototype, {
     setup() {
         super.setup(...arguments);
+        this.ygDialog = useService("dialog");
         onMounted(() => this._ygPintarCheque());
         onPatched(() => this._ygPintarCheque());
     },
@@ -125,12 +139,18 @@ patch(PaymentScreenPaymentLines.prototype, {
                     const v = ev.target.value.trim();
                     line[c.k] = c.tipo === "date" ? v || false : v;
                     this._ygMarcarFaltantes(host, line);
+                    if (c.k === "check_number") {
+                        this._ygRevisarNumero(line, ev.target);
+                    }
                 };
             }
             inp.dataset.ygCampo = c.k;
             col.appendChild(inp);
             caja.appendChild(col);
         }
+        const avisoNro = document.createElement("div");
+        avisoNro.className = "yg-nro-aviso w-100 small text-warning";
+        caja.appendChild(avisoNro);
         const aviso = document.createElement("div");
         aviso.className = "yg-cuit-aviso w-100 small text-warning";
         caja.appendChild(aviso);
@@ -147,6 +167,18 @@ patch(PaymentScreenPaymentLines.prototype, {
                 el.classList.toggle("border-warning", !line[c.k]);
             }
         }
+        // Número fuera de lo habitual: borde y texto mientras siga así.
+        const nro = host.querySelector('[data-yg-campo="check_number"]');
+        const avisoNro = host.querySelector(".yg-nro-aviso");
+        if (nro) {
+            const raro = nroRaro(line.check_number);
+            nro.classList.toggle("border-warning", !line.check_number || raro);
+            if (avisoNro) {
+                avisoNro.textContent = raro
+                    ? "⚠ El número tiene más de 8 dígitos o no es un número: revisalo con el cheque a la vista"
+                    : "";
+            }
+        }
         // El CUIT además tiene que cerrar el dígito verificador.
         const cu = host.querySelector('[data-yg-campo="check_issuer_vat"]');
         const aviso = host.querySelector(".yg-cuit-aviso");
@@ -156,6 +188,30 @@ patch(PaymentScreenPaymentLines.prototype, {
             if (aviso) {
                 aviso.textContent = mal ? "El CUIT no cierra: revisalo con el cheque a la vista" : "";
             }
+        }
+    },
+
+    /**
+     * Al terminar de escribir el número (al pasar al campo siguiente), y no al
+     * validar: en ese momento el cajero todavía tiene el cheque en la mano.
+     */
+    async _ygRevisarNumero(line, input) {
+        if (!nroRaro(line.check_number)) {
+            return;
+        }
+        const seguir = await ask(this.ygDialog, {
+            title: _t("Revisá el número del cheque"),
+            body: _t(
+                "El número %s tiene más de 8 dígitos o algo que no es un número.\n\n" +
+                    "Compará contra el cheque. Si está bien, podés seguir.",
+                String(line.check_number).trim()
+            ),
+            confirmLabel: _t("Está bien, seguir"),
+            cancelLabel: _t("Corregir"),
+        });
+        if (!seguir && input?.isConnected) {
+            input.focus();
+            input.select();
         }
     },
 });
