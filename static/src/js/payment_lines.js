@@ -90,7 +90,7 @@ patch(PaymentScreenPaymentLines.prototype, {
         // Redibujar en cada tecla haria perder el foco del input: solo se arma
         // cuando cambia la linea.
         if (host.dataset.ygUuid === line.uuid) {
-            this._ygMarcarFaltantes(host, line);
+            this._ygMarcarFaltantesCheque(host, line);
             return;
         }
         host.dataset.ygUuid = line.uuid;
@@ -124,7 +124,7 @@ patch(PaymentScreenPaymentLines.prototype, {
                 }
                 inp.onchange = (ev) => {
                     line.check_type = ev.target.value || false;
-                    this._ygMarcarFaltantes(host, line);
+                    this._ygMarcarFaltantesCheque(host, line);
                 };
             } else {
                 inp = document.createElement("input");
@@ -138,7 +138,7 @@ patch(PaymentScreenPaymentLines.prototype, {
                     // Fechas vacías = false: "" no es un valor válido al sincronizar.
                     const v = ev.target.value.trim();
                     line[c.k] = c.tipo === "date" ? v || false : v;
-                    this._ygMarcarFaltantes(host, line);
+                    this._ygMarcarFaltantesCheque(host, line);
                     if (c.k === "check_number") {
                         this._ygRevisarNumero(line, ev.target);
                     }
@@ -155,12 +155,15 @@ patch(PaymentScreenPaymentLines.prototype, {
         aviso.className = "yg-cuit-aviso w-100 small text-warning";
         caja.appendChild(aviso);
         host.appendChild(caja);
-        this._ygMarcarFaltantes(host, line);
+        this._ygMarcarFaltantesCheque(host, line);
     },
 
     /** Borde naranja en lo que falta. Naranja y no rojo: el usuario es daltonico,
         y ademas el asterisco de la etiqueta ya marca cual es obligatorio. */
-    _ygMarcarFaltantes(host, line) {
+    // OJO con el nombre: `yaguven_pos_tarjeta` parchea el MISMO componente y
+    // tenía un `_ygMarcarFaltantes`; con el mismo nombre, el último patch tapa
+    // al otro y el borde/avisos del cheque no se pintaban (medido 10/11).
+    _ygMarcarFaltantesCheque(host, line) {
         for (const c of CAMPOS.filter((x) => x.req)) {
             const el = host.querySelector(`[data-yg-campo="${c.k}"]`);
             if (el) {
